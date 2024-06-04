@@ -1,0 +1,5 @@
+struct student {
+    string              name;
+    long               s_num;
+    string               data;
+};

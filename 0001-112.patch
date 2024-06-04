@@ -1,0 +1,381 @@
+From 095e200bfc73a1d1463342c3932da6d40c632570 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E7=89=9B=E5=93=8Dc++240108?= <2582452313@xiaomi.com>
+Date: Tue, 4 Jun 2024 17:32:47 +0800
+Subject: [PATCH] 112
+
+---
+ CMakeLists.txt                         |   1 +
+ examples/PublishStudent/CMakeLists.txt |  49 +++++++++
+ examples/PublishStudent/main.c         | 142 +++++++++++++++++++++++++
+ examples/PublishStudent/student.c      |  63 +++++++++++
+ examples/PublishStudent/student.h      |  57 ++++++++++
+ examples/PublishStudent/student.idl    |   5 +
+ 6 files changed, 317 insertions(+)
+ create mode 100644 examples/PublishStudent/CMakeLists.txt
+ create mode 100644 examples/PublishStudent/main.c
+ create mode 100644 examples/PublishStudent/student.c
+ create mode 100644 examples/PublishStudent/student.h
+ create mode 100644 examples/PublishStudent/student.idl
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index be0dcdd..9549785 100755
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -405,6 +405,7 @@ if(UCLIENT_BUILD_EXAMPLES)
+     add_subdirectory(examples/Discovery)
+     add_subdirectory(examples/MultiSessionHelloWorld)
+     add_subdirectory(examples/PublishHelloWorld)
++    add_subdirectory(examples/PublishStudent)
+     add_subdirectory(examples/PublishHelloWorldP2P)
+     add_subdirectory(examples/ReplyAdder)
+     add_subdirectory(examples/RequestAdder)
+diff --git a/examples/PublishStudent/CMakeLists.txt b/examples/PublishStudent/CMakeLists.txt
+new file mode 100644
+index 0000000..6fd1b42
+--- /dev/null
++++ b/examples/PublishStudent/CMakeLists.txt
+@@ -0,0 +1,49 @@
++# Copyright 2017 Proyectos y Sistemas de Mantenimiento SL (eProsima).
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++cmake_minimum_required(VERSION 2.8.12)
++if (${CMAKE_VERSION} VERSION_GREATER 3.0)
++    cmake_policy(SET CMP0048 NEW)
++endif()
++
++project(PublishStudentClient C)
++
++if(NOT UCLIENT_BUILD_EXAMPLES)
++    find_package(microxrcedds_client REQUIRED)
++endif()
++
++if(NOT UCLIENT_PROFILE_UDP)
++    message(WARNING "Can not compile example: The UCLIENT_PROFILE_UDP must be enabled.")
++else()
++    add_executable(${PROJECT_NAME} main.c student.c)
++    if(MSVC OR MSVC_IDE)
++        target_compile_options(${PROJECT_NAME} PRIVATE /wd4996)
++    endif()
++
++    set_target_properties(${PROJECT_NAME} PROPERTIES
++        C_STANDARD 99
++        C_STANDARD_REQUIRED YES
++        )
++
++    target_link_libraries(${PROJECT_NAME} microxrcedds_client $<$<C_COMPILER_ID:GNU>:-Wl,--gc-section,--no-export-dynamic>)
++
++    if(UCLIENT_INSTALL_EXAMPLES)
++        install(
++            TARGETS
++                ${PROJECT_NAME}
++            RUNTIME DESTINATION
++                ${BIN_INSTALL_DIR}
++            )
++    endif()
++endif()
+diff --git a/examples/PublishStudent/main.c b/examples/PublishStudent/main.c
+new file mode 100644
+index 0000000..aec7edf
+--- /dev/null
++++ b/examples/PublishStudent/main.c
+@@ -0,0 +1,142 @@
++// Copyright 2017 Proyectos y Sistemas de Mantenimiento SL (eProsima).
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include "student.h"
++
++#include <uxr/client/client.h>
++#include <ucdr/microcdr.h>
++
++#include <stdio.h> //printf
++#include <string.h> //strcmp
++#include <stdlib.h> //atoi
++
++#define STREAM_HISTORY  8
++#define BUFFER_SIZE     UXR_CONFIG_UDP_TRANSPORT_MTU* STREAM_HISTORY
++
++int main(
++        int args,
++        char** argv)
++{
++    // CLI
++    if (3 > args || 0 == atoi(argv[2]))
++    {
++        printf("usage: program [-h | --help] | ip port [<max_topics>]\n");
++        return 0;
++    }
++
++    char* ip = argv[1];
++    char* port = argv[2];
++    uint32_t max_topics = (args == 4) ? (uint32_t)atoi(argv[3]) : UINT32_MAX;
++
++    // Transport
++    uxrUDPTransport transport;
++    if (!uxr_init_udp_transport(&transport, UXR_IPv4, ip, port))
++    {
++        printf("Error at create transport.\n");
++        return 1;
++    }
++
++    // Session
++    uxrSession session;
++    uxr_init_session(&session, &transport.comm, 0xAAAABBBB);
++    if (!uxr_create_session(&session))
++    {
++        printf("Error at create session.\n");
++        return 1;
++    }
++
++    // Streams
++    uint8_t output_reliable_stream_buffer[BUFFER_SIZE];
++    uxrStreamId reliable_out = uxr_create_output_reliable_stream(&session, output_reliable_stream_buffer, BUFFER_SIZE,
++                    STREAM_HISTORY);
++
++    uint8_t input_reliable_stream_buffer[BUFFER_SIZE];
++    uxr_create_input_reliable_stream(&session, input_reliable_stream_buffer, BUFFER_SIZE, STREAM_HISTORY);
++
++    // Create entities
++    uxrObjectId participant_id = uxr_object_id(0x01, UXR_PARTICIPANT_ID);
++    const char* participant_xml = "<dds>"
++            "<participant>"
++            "<rtps>"
++            "<name>default_xrce_participant</name>"
++            "</rtps>"
++            "</participant>"
++            "</dds>";
++    uint16_t participant_req = uxr_buffer_create_participant_xml(&session, reliable_out, participant_id, 0,
++                    participant_xml, UXR_REPLACE);
++
++    uxrObjectId topic_id = uxr_object_id(0x01, UXR_TOPIC_ID);
++    const char* topic_xml = "<dds>"
++            "<topic>"
++            "<name>studentTopic</name>"
++            "<dataType>student</dataType>"
++            "</topic>"
++            "</dds>";
++    uint16_t topic_req = uxr_buffer_create_topic_xml(&session, reliable_out, topic_id, participant_id, topic_xml,
++                    UXR_REPLACE);
++
++    uxrObjectId publisher_id = uxr_object_id(0x01, UXR_PUBLISHER_ID);
++    const char* publisher_xml = "";
++    uint16_t publisher_req = uxr_buffer_create_publisher_xml(&session, reliable_out, publisher_id, participant_id,
++                    publisher_xml, UXR_REPLACE);
++
++    uxrObjectId datawriter_id = uxr_object_id(0x01, UXR_DATAWRITER_ID);
++    const char* datawriter_xml = "<dds>"
++            "<data_writer>"
++            "<topic>"
++            "<kind>NO_KEY</kind>"
++            "<name>studentTopic</name>"
++            "<dataType>student</dataType>"
++            "</topic>"
++            "</data_writer>"
++            "</dds>";
++    uint16_t datawriter_req = uxr_buffer_create_datawriter_xml(&session, reliable_out, datawriter_id, publisher_id,
++                    datawriter_xml, UXR_REPLACE);
++
++    // Send create entities message and wait its status
++    uint8_t status[4];
++    uint16_t requests[4] = {
++        participant_req, topic_req, publisher_req, datawriter_req
++    };
++    if (!uxr_run_session_until_all_status(&session, 1000, requests, status, 4))
++    {
++        printf("Error at create entities: participant: %i topic: %i publisher: %i datawriter: %i\n", status[0],
++                status[1], status[2], status[3]);
++        return 1;
++    }
++
++    // Write topics
++    bool connected = true;
++    uint32_t count = 0;
++    while (connected && count < max_topics)
++    {
++        student topic = {
++            "niuxiang", 2021215238,"20030112"
++        };
++
++        ucdrBuffer ub;
++        uint32_t topic_size = student_size_of_topic(&topic, 0);
++        uxr_prepare_output_stream(&session, reliable_out, datawriter_id, &ub, topic_size);
++        student_serialize_topic(&ub, &topic);
++
++        printf("Send topic: %s, id: %ld, date:%s\n", topic.name, topic.s_num,topic.data);
++        connected = uxr_run_session_time(&session, 1000);
++    }
++
++    // Delete resources
++    uxr_delete_session(&session);
++    uxr_close_udp_transport(&transport);
++
++    return 0;
++}
+diff --git a/examples/PublishStudent/student.c b/examples/PublishStudent/student.c
+new file mode 100644
+index 0000000..02df359
+--- /dev/null
++++ b/examples/PublishStudent/student.c
+@@ -0,0 +1,63 @@
++// Copyright 2016 Proyectos y Sistemas de Mantenimiento SL (eProsima).
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++/*!
++ * @file student.c
++ * This source file contains the definition of the described types in the IDL file.
++ *
++ * This file was generated by the tool gen.
++ */
++
++#include "student.h"
++
++#include <ucdr/microcdr.h>
++#include <string.h>
++
++bool student_serialize_topic(ucdrBuffer* writer, const student* topic)
++{
++    bool success = true;
++
++        success &= ucdr_serialize_string(writer, topic->name);
++
++        success &= ucdr_serialize_int32_t(writer, topic->s_num);
++
++        success &= ucdr_serialize_string(writer, topic->data);
++
++    return success && !writer->error;
++}
++
++bool student_deserialize_topic(ucdrBuffer* reader, student* topic)
++{
++    bool success = true;
++
++        success &= ucdr_deserialize_string(reader, topic->name, 255);
++
++        success &= ucdr_deserialize_int32_t(reader, &topic->s_num);
++
++        success &= ucdr_deserialize_string(reader, topic->data, 255);
++
++    return success && !reader->error;
++}
++
++uint32_t student_size_of_topic(const student* topic, uint32_t size)
++{
++    uint32_t previousSize = size;
++        size += ucdr_alignment(size, 4) + 4 + (uint32_t)strlen(topic->name) + 1;
++
++        size += ucdr_alignment(size, 4) + 4;
++
++        size += ucdr_alignment(size, 4) + 4 + (uint32_t)strlen(topic->data) + 1;
++
++    return size - previousSize;
++}
+diff --git a/examples/PublishStudent/student.h b/examples/PublishStudent/student.h
+new file mode 100644
+index 0000000..1ab9c94
+--- /dev/null
++++ b/examples/PublishStudent/student.h
+@@ -0,0 +1,57 @@
++// Copyright 2016 Proyectos y Sistemas de Mantenimiento SL (eProsima).
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++/*!
++ * @file student.h
++ * This header file contains the declaration of the described types in the IDL file.
++ *
++ * This file was generated by the tool gen.
++ */
++
++#ifndef _student_H_
++#define _student_H_
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#include <stdint.h>
++#include <stdbool.h>
++
++/*!
++ * @brief This struct represents the structure student defined by the user in the IDL file.
++ * @ingroup student
++ */
++typedef struct student
++{
++    char name[255];
++
++    int32_t s_num;
++    char data[255];
++
++} student;
++
++struct ucdrBuffer;
++
++bool student_serialize_topic(struct ucdrBuffer* writer, const student* topic);
++bool student_deserialize_topic(struct ucdrBuffer* reader, student* topic);
++uint32_t student_size_of_topic(const student* topic, uint32_t size);
++
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // _student_H_
+\ No newline at end of file
+diff --git a/examples/PublishStudent/student.idl b/examples/PublishStudent/student.idl
+new file mode 100644
+index 0000000..e0f6e09
+--- /dev/null
++++ b/examples/PublishStudent/student.idl
+@@ -0,0 +1,5 @@
++struct student {
++    string              name;
++    long               s_num;
++    string               data;
++};
+-- 
+2.34.1
+
